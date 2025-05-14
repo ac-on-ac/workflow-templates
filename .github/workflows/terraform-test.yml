@@ -57,7 +57,7 @@ jobs:
           fi
 
   terraform-test:
-    needs: find_test_files
+    needs: find-test-files
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -75,7 +75,7 @@ jobs:
 
       - name: Run Validation Tests
         run: |
-          validation_tests=$(echo '${{ needs.find_test_files.outputs.validation_tests }}' | jq -r '.[]' 2>/dev/null || echo "")
+          validation_tests=$(echo '${{ needs.find-test-files.outputs.validation_tests }}' | jq -r '.[]' 2>/dev/null || echo "")
           
           if [ -n "$validation_tests" ]; then
             echo "======= RUNNING VALIDATION TESTS ======="
@@ -92,7 +92,7 @@ jobs:
 
       - name: Run Unit Tests
         run: |
-          unit_tests=$(echo '${{ needs.find_test_files.outputs.unit_tests }}' | jq -r '.[]' 2>/dev/null || echo "")
+          unit_tests=$(echo '${{ needs.find-test-files.outputs.unit_tests }}' | jq -r '.[]' 2>/dev/null || echo "")
           
           if [ -n "$unit_tests" ]; then
             echo "======= RUNNING UNIT TESTS ======="
@@ -109,7 +109,7 @@ jobs:
 
       - name: Run Integration Tests
         run: |
-          integration_tests=$(echo '${{ needs.find_test_files.outputs.integration_tests }}' | jq -r '.[]' 2>/dev/null || echo "")
+          integration_tests=$(echo '${{ needs.find-test-files.outputs.integration_tests }}' | jq -r '.[]' 2>/dev/null || echo "")
           
           if [ -n "$integration_tests" ]; then
             echo "======= RUNNING INTEGRATION TESTS ======="
