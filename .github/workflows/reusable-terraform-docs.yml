@@ -1,0 +1,90 @@
+name: Reusable Terraform Docs Workflow
+
+# Add permissions to allow writing to the repository
+permissions:
+  contents: write
+  pull-requests: write
+
+on:
+  workflow_call:
+    inputs:
+      terraform_docs_config_file:
+        description: "Path to the terraform-docs config file"
+        required: false
+        type: string
+        default: ".terraform-docs.yml"
+      working_directory:
+        description: "Directory to generate docs in (defaults to repository root)"
+        required: false
+        type: string
+        default: "."
+
+jobs:
+  terraform-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+          
+      - name: Install terraform-docs
+        run: |
+          curl -sSLo ./terraform-docs.tar.gz https://terraform-docs.io/dl/v0.20.0/terraform-docs-v0.20.0-linux-amd64.tar.gz
+          tar -xzf terraform-docs.tar.gz
+          chmod +x terraform-docs
+          mkdir -p $HOME/bin
+          mv terraform-docs $HOME/bin
+          echo "$HOME/bin" >> $GITHUB_PATH
+      
+      - name: Generate README.md files
+        run: |
+          cd ${{ inputs.working_directory }}
+          terraform-docs -c ${{ inputs.terraform_docs_config_file }} .
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Stage all changes that terraform-docs might have created
+          git add .
+          
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0 # Exit gracefully if no changes
+          else
+            # Commit the changes
+            git commit -m "Update documentation files"
+            
+            # Try to push directly first
+            if git push origin HEAD:${{ github.head_ref }}; then
+              echo "Changes pushed successfully"
+            else
+              echo "Direct push failed, fetching latest changes..."
+              git fetch origin ${{ github.head_ref }}
+              
+              # Try to rebase
+              if git rebase origin/${{ github.head_ref }}; then
+                echo "Rebase successful, pushing changes..."
+                git push --force-with-lease origin HEAD:${{ github.head_ref }}
+              else
+                echo "Rebase failed, resolving conflicts automatically..."
+                git rebase --abort
+                
+                # Create a temporary branch for our changes
+                git checkout -b temp-docs-branch
+                git add .
+                git commit --amend --no-edit
+                
+                # Switch back to the original branch and merge our changes
+                git checkout ${{ github.head_ref }}
+                git merge temp-docs-branch --no-ff -m "Merge documentation updates"
+                git push origin HEAD:${{ github.head_ref }}
+              fi
+            fi
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
