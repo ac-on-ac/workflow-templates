@@ -1,0 +1,201 @@
+name: Reusable Release and Tag Workflow
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: "Pull request number that triggered the workflow"
+        required: true
+        type: number
+      pr_merged:
+        description: "Whether the PR was merged or not"
+        required: true
+        type: boolean
+    outputs:
+      new_tag:
+        description: "The newly created tag version"
+        value: ${{ jobs.create_release.outputs.new_tag }}
+
+permissions:
+  pull-requests: read
+  contents: write
+
+jobs:
+  create_release:
+    if: inputs.pr_merged == true
+    runs-on: ubuntu-latest
+    outputs:
+      new_tag: ${{ steps.determine_version.outputs.new_tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0  # Fetch all history and tags
+
+      - name: Fetch all tags
+        run: git fetch --tags
+
+      - name: Get the latest tag
+        id: get_latest_tag
+        run: |
+          latest_tag=$(git describe --tags `git rev-list --tags --max-count=1` 2>/dev/null || echo "")
+          echo "tag=$latest_tag" >> $GITHUB_OUTPUT
+
+      - name: Extract version numbers
+        id: extract_version
+        run: |
+          latest_tag=${{ steps.get_latest_tag.outputs.tag }}
+          if [ -z "$latest_tag" ]; then
+            echo "major=0" >> $GITHUB_OUTPUT
+            echo "minor=0" >> $GITHUB_OUTPUT
+            echo "patch=0" >> $GITHUB_OUTPUT
+          else
+            IFS='.' read -r -a version_parts <<< "${latest_tag#v}"
+            echo "major=${version_parts[0]}" >> $GITHUB_OUTPUT
+            echo "minor=${version_parts[1]}" >> $GITHUB_OUTPUT
+            echo "patch=${version_parts[2]}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get pull request title and description
+        id: get_pr_info
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: ${{ inputs.pr_number }}
+            });
+            return JSON.stringify({ title: data.title, body: data.body || "" });
+          result-encoding: string
+
+      - name: Validate PR title format
+        id: validate_pr_title
+        run: |
+          pr_info='${{ steps.get_pr_info.outputs.result }}'
+          pr_title=$(echo $pr_info | jq -r '.title')
+          
+          echo "Checking PR title: '$pr_title'"
+          
+          if [[ "$pr_title" == patch:* ]] || [[ "$pr_title" == minor:* ]] || [[ "$pr_title" == major:* ]]; then
+            echo "PR title format is valid: $pr_title"
+            echo "is_valid=true" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Invalid PR title format: '$pr_title'. PR title must start with one of: 'patch:', 'minor:', or 'major:'"
+            echo "Examples of valid PR titles:"
+            echo "  - patch: Fix a bug in subnet creation"
+            echo "  - minor: Add support for NAT gateway"
+            echo "  - major: Complete redesign of network architecture"
+            echo "is_valid=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Determine new version
+        id: determine_version
+        if: steps.validate_pr_title.outputs.is_valid == 'true'
+        run: |
+          pr_info='${{ steps.get_pr_info.outputs.result }}'
+          pr_title=$(echo $pr_info | jq -r '.title')
+          major=${{ steps.extract_version.outputs.major }}
+          minor=${{ steps.extract_version.outputs.minor }}
+          patch=${{ steps.extract_version.outputs.patch }}
+
+          if [ "$major" -eq 0 ] && [ "$minor" -eq 0 ] && [ "$patch" -eq 0 ]; then
+            # No tags exist, determine the initial version based on PR title
+            case "$pr_title" in
+              patch:*)
+                new_tag="v0.0.1"
+                ;;
+              minor:*)
+                new_tag="v0.1.0"
+                ;;
+              major:*)
+                new_tag="v1.0.0"
+                ;;
+            esac
+          else
+            # Increment version based on PR title
+            case "$pr_title" in
+              patch:*)
+                patch=$((patch + 1))
+                ;;
+              minor:*)
+                minor=$((minor + 1))
+                patch=0
+                ;;
+              major:*)
+                major=$((major + 1))
+                minor=0
+                patch=0
+                ;;
+            esac
+
+            new_tag="v$major.$minor.$patch"
+          fi
+
+          # Check if the tag already exists and increment the version if necessary
+          while git rev-parse "$new_tag" >/dev/null 2>&1; do
+            IFS='.' read -r -a version_parts <<< "${new_tag#v}"
+            major=${version_parts[0]}
+            minor=${version_parts[1]}
+            patch=${version_parts[2]}
+            patch=$((patch + 1))
+            new_tag="v$major.$minor.$patch"
+          done
+
+          echo "new_tag=$new_tag" >> $GITHUB_OUTPUT
+
+      - name: Create new tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          new_tag=${{ steps.determine_version.outputs.new_tag }}
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git tag $new_tag
+          git push origin $new_tag
+
+      - name: Escape JSON strings
+        id: escape_json
+        run: |
+          pr_info=$(echo '${{ steps.get_pr_info.outputs.result }}' | jq @json)
+          echo "pr_info=$pr_info" >> $GITHUB_OUTPUT
+
+      - name: Create or Update GitHub release
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const newTag = '${{ steps.determine_version.outputs.new_tag }}';
+            const prInfo = JSON.parse(${{ steps.escape_json.outputs.pr_info }});
+
+            // Check if the release notes for the new tag already exist
+            const existingRelease = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag: newTag
+            }).catch(() => null);
+
+            if (existingRelease) {
+              // Update the existing release with new PR info
+              await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: existingRelease.data.id,
+                body: `${prInfo.body}`
+              });
+            } else {
+              // Create a new release
+              await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: newTag,
+                name: newTag,
+                body: `${prInfo.body}`,
+                draft: false,
+                prerelease: false
+              });
+            }
+          result-encoding: string
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
