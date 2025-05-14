@@ -1,0 +1,126 @@
+name: Reusable Terraform Test Workflow
+
+# Add permissions to allow writing to the repository
+permissions:
+  contents: write
+  pull-requests: write
+
+on:
+  workflow_call:
+    inputs:
+      test_directory:
+        required: true
+        type: string
+      azure_credentials:
+        required: true
+        type: string
+
+jobs:
+  find_test_files:
+    runs-on: ubuntu-latest
+    outputs:
+      validation_tests: ${{ steps.find.outputs.validation_tests }}
+      unit_tests: ${{ steps.find.outputs.unit_tests }}
+      integration_tests: ${{ steps.find.outputs.integration_tests }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Find and categorize test files
+        id: find
+        run: |
+          # Find all test files and categorize them
+          validation_tests=$(find ${{ inputs.test_directory }} -name "validation-*.tftest.hcl" | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          unit_tests=$(find ${{ inputs.test_directory }} -name "unit-*.tftest.hcl" | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          integration_tests=$(find ${{ inputs.test_directory }} -name "integration-*.tftest.hcl" | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          
+          echo "validation_tests=$validation_tests" >> $GITHUB_OUTPUT
+          echo "unit_tests=$unit_tests" >> $GITHUB_OUTPUT
+          echo "integration_tests=$integration_tests" >> $GITHUB_OUTPUT
+          
+          echo "Validation tests: $validation_tests"
+          echo "Unit tests: $unit_tests" 
+          echo "Integration tests: $integration_tests"
+          
+          # Check if any test files were found
+          all_validation_count=$(echo $validation_tests | jq '. | length')
+          all_unit_count=$(echo $unit_tests | jq '. | length')
+          all_integration_count=$(echo $integration_tests | jq '. | length')
+          total_test_count=$((all_validation_count + all_unit_count + all_integration_count))
+          
+          if [ "$total_test_count" -eq 0 ]; then
+            echo "ERROR: No test files were found matching any pattern (validation-*.tftest.hcl, unit-*.tftest.hcl, integration-*.tftest.hcl)"
+            echo "Please ensure test files are properly named and located in the tests directory."
+            exit 1
+          else
+            echo "Found $total_test_count test files in total."
+          fi
+
+  terraform-test:
+    needs: find_test_files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+    
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Azure Login
+        uses: azure/login@v2.2.0
+        with:
+          creds: ${{ inputs.azure_credentials }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Run Validation Tests
+        run: |
+          validation_tests=$(echo '${{ needs.find_test_files.outputs.validation_tests }}' | jq -r '.[]' 2>/dev/null || echo "")
+          
+          if [ -n "$validation_tests" ]; then
+            echo "======= RUNNING VALIDATION TESTS ======="
+            for test_file in $validation_tests; do
+              echo "-------------------------------------------"
+              echo "Running validation test: $test_file"
+              # Run the test with proper filter format
+              terraform test -filter="${{ inputs.test_directory }}/${test_file}.tftest.hcl"
+              echo "-------------------------------------------"
+            done
+          else
+            echo "No validation tests found"
+          fi
+
+      - name: Run Unit Tests
+        run: |
+          unit_tests=$(echo '${{ needs.find_test_files.outputs.unit_tests }}' | jq -r '.[]' 2>/dev/null || echo "")
+          
+          if [ -n "$unit_tests" ]; then
+            echo "======= RUNNING UNIT TESTS ======="
+            for test_file in $unit_tests; do
+              echo "-------------------------------------------"
+              echo "Running unit test: $test_file"
+              # Run the test with proper filter format
+              terraform test -filter="${{ inputs.test_directory }}/${test_file}.tftest.hcl"
+              echo "-------------------------------------------"
+            done
+          else
+            echo "No unit tests found"
+          fi
+
+      - name: Run Integration Tests
+        run: |
+          integration_tests=$(echo '${{ needs.find_test_files.outputs.integration_tests }}' | jq -r '.[]' 2>/dev/null || echo "")
+          
+          if [ -n "$integration_tests" ]; then
+            echo "======= RUNNING INTEGRATION TESTS ======="
+            for test_file in $integration_tests; do
+              echo "-------------------------------------------"
+              echo "Running integration test: $test_file"
+              # Run the test with proper filter format
+              terraform test -filter="${{ inputs.test_directory }}/${test_file}.tftest.hcl"
+              echo "-------------------------------------------"
+            done
+          else
+            echo "No integration tests found"
+          fi
