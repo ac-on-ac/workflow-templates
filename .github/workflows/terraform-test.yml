@@ -11,12 +11,12 @@ on:
       test_directory:
         required: true
         type: string
+    secrets:
       azure_credentials:
         required: true
-        type: string
 
 jobs:
-  find_test_files:
+  find-test-files:
     runs-on: ubuntu-latest
     outputs:
       validation_tests: ${{ steps.find.outputs.validation_tests }}
@@ -61,15 +61,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
-    
+        uses: actions/checkout@v2    
       - name: Install Terraform
         uses: hashicorp/setup-terraform@v3
-
+        
       - name: Azure Login
         uses: azure/login@v2.2.0
         with:
-          creds: ${{ inputs.azure_credentials }}
+          creds: ${{ secrets.azure_credentials }}
 
       - name: Terraform Init
         run: terraform init
