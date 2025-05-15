@@ -4,9 +4,9 @@ This repository is designed to host reusable workflow templates for Terraform te
 
 ## Available Workflows
 
-- **reusable-terraform-test.yml**: Runs Terraform tests for a module
-- **reusable-terraform-docs.yml**: Generates documentation for Terraform modules
-- **reusable-release-and-tag.yml**: Creates releases and tags for repositories
+- **[reusable-terraform-test.yml](docs/reusable-terraform-test.md)**: Runs Terraform tests for a module
+- **[reusable-terraform-docs.yml](docs/reusable-terraform-docs.md)**: Generates documentation for Terraform modules
+- **[reusable-release-and-tag.yml](docs/reusable-release-and-tag.md)**: Creates releases and tags for repositories
 
 ## Versioning Individual Workflows
 
