@@ -1,183 +1,105 @@
-name: Release Single Workflow File
+name: Release Single Workflow
 
 on:
   workflow_dispatch:
     inputs:
       workflow_file:
-        description: 'The workflow file to release (relative path from .github/workflows)'
+        description: 'The file name of the workflow to tag/release'
         required: true
         type: string
-      version_bump:
-        description: 'Version bump type'
+      version_type:
+        description: 'Which semantic version to upgrade'
         required: true
-        default: 'patch'
         type: choice
         options:
           - patch
           - minor
           - major
-      release_notes:
-        description: 'Release notes for this workflow version'
-        required: true
-        type: string
-        default: |
-          # Changes Made
-          ## Capabilities Added
-          - 
-          ## Bugs Fixed
-          - 
-
-permissions:
-  contents: write
-  pull-requests: read
+        default: 'patch'
 
 jobs:
-  release_workflow:
+  tag-and-release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetch all history and tags
+          fetch-depth: 0
 
-      - name: Verify workflow file exists
-        id: verify_file
+      - name: Setup Git User
         run: |
-          WORKFLOW_PATH=".github/workflows/${{ github.event.inputs.workflow_file }}"
-          if [ ! -f "$WORKFLOW_PATH" ]; then
-            echo "Error: Workflow file not found at $WORKFLOW_PATH"
-            exit 1
-          fi
-          
-          # Extract workflow name without extension for use in tag
-          WORKFLOW_NAME=$(basename "${{ github.event.inputs.workflow_file }}" .yml)
-          # Remove "reusable-" prefix if it exists to make the tag shorter
-          SHORT_NAME=$(echo "$WORKFLOW_NAME" | sed 's/^reusable-//')
-          echo "workflow_name=$WORKFLOW_NAME" >> $GITHUB_OUTPUT
-          echo "short_name=$SHORT_NAME" >> $GITHUB_OUTPUT
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
 
-      - name: Fetch all tags
-        run: git fetch --tags
-
-      - name: Get latest workflow tag
-        id: get_latest_tag
+      - name: Get Workflow Name
+        id: workflow-name
         run: |
-          SHORT_NAME=${{ steps.verify_file.outputs.short_name }}
+          WORKFLOW_FILE=${{ github.event.inputs.workflow_file }}
+          WORKFLOW_NAME=$(basename "$WORKFLOW_FILE" .yml)
+          CLEAN_NAME=${WORKFLOW_NAME/reusable-/}
+          echo "clean_name=$CLEAN_NAME" >> $GITHUB_OUTPUT
+          echo "Working with workflow: $CLEAN_NAME"
+
+      - name: Get Latest Tag
+        id: get-latest-tag
+        run: |
+          TAG_PREFIX="${{ steps.workflow-name.outputs.clean_name }}-"
           
-          # Look for tags specific to this workflow file using the format: {short-name}-v{semver}
-          latest_tag=$(git tag -l "$SHORT_NAME-v*" --sort=-v:refname | head -n 1 || echo "")
-          echo "tag=$latest_tag" >> $GITHUB_OUTPUT
+          # Fetch all tags that match the prefix
+          LATEST_TAG=$(git tag -l "${TAG_PREFIX}*" | sort -V | tail -n 1)
           
-          if [ -z "$latest_tag" ]; then
-            echo "No previous tags found for this workflow, will create initial version"
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No previous tag found. Starting with v0.0.0"
+            CURRENT_VERSION="0.0.0"
           else
-            echo "Latest tag found: $latest_tag"
-          fi
-
-      - name: Determine new version
-        id: determine_version
-        run: |
-          latest_tag=${{ steps.get_latest_tag.outputs.tag }}
-          SHORT_NAME=${{ steps.verify_file.outputs.short_name }}
-          
-          # If no previous tag exists, start at v0.1.0
-          if [ -z "$latest_tag" ]; then
-            major=0
-            minor=1
-            patch=0
-          else
-            # Extract version numbers from tag (format: {short-name}-v{major}.{minor}.{patch})
-            version_part=$(echo $latest_tag | sed -E "s/$SHORT_NAME-v//")
-            IFS='.' read -r -a version_parts <<< "$version_part"
-            major=${version_parts[0]}
-            minor=${version_parts[1]}
-            patch=${version_parts[2]}
-            
-            # Increment version based on input
-            case "${{ github.event.inputs.version_bump }}" in
-              patch)
-                patch=$((patch + 1))
-                ;;
-              minor)
-                minor=$((minor + 1))
-                patch=0
-                ;;
-              major)
-                major=$((major + 1))
-                minor=0
-                patch=0
-                ;;
-            esac
+            CURRENT_VERSION=${LATEST_TAG#$TAG_PREFIX}
+            CURRENT_VERSION=${CURRENT_VERSION#v}
+            echo "Latest tag found: $LATEST_TAG with version $CURRENT_VERSION"
           fi
           
-          new_tag="$SHORT_NAME-v$major.$minor.$patch"
-          
-          # Check if the tag already exists and increment if necessary
-          while git rev-parse "$new_tag" >/dev/null 2>&1; do
-            patch=$((patch + 1))
-            new_tag="$SHORT_NAME-v$major.$minor.$patch"
-          done
-          
-          echo "new_tag=$new_tag" >> $GITHUB_OUTPUT
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "tag_prefix=$TAG_PREFIX" >> $GITHUB_OUTPUT
 
-      - name: Create new tag
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Calculate New Version
+        id: semver
         run: |
-          new_tag=${{ steps.determine_version.outputs.new_tag }}
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
-          git tag $new_tag -m "Release $new_tag"
-          git push origin $new_tag
+          CURRENT_VERSION=${{ steps.get-latest-tag.outputs.current_version }}
+          VERSION_TYPE=${{ github.event.inputs.version_type }}
+          
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          
+          case "$VERSION_TYPE" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+          
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          NEW_TAG="${{ steps.get-latest-tag.outputs.tag_prefix }}${NEW_VERSION}"
+          
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+          echo "New version will be: $NEW_VERSION with tag $NEW_TAG"
 
-      - name: Create GitHub release with workflow file as asset
-        id: create_release
-        uses: actions/github-script@v6
+      - name: Create and Push Tag
+        run: |
+          git tag ${{ steps.semver.outputs.new_tag }}
+          git push origin ${{ steps.semver.outputs.new_tag }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
         with:
-          script: |
-            const fs = require('fs');
-            const newTag = '${{ steps.determine_version.outputs.new_tag }}';
-            const workflowFile = '.github/workflows/${{ github.event.inputs.workflow_file }}';
-            const workflowContent = fs.readFileSync(workflowFile, 'utf8');
-              // Prepare release notes
-            let releaseNotes = `# ${{ steps.verify_file.outputs.workflow_name }} Release\n\n`;
-            releaseNotes += '${{ github.event.inputs.release_notes }}\n\n';
-            
-            // Add instructions on how to reference this workflow
-            releaseNotes += `## Usage\n\n`;
-            releaseNotes += `To use this specific version of the workflow in your repository:\n\n`;
-            releaseNotes += `\`\`\`yaml\njobs:\n  your_job:\n    uses: ${context.repo.owner}/${context.repo.repo}/.github/workflows/${{ github.event.inputs.workflow_file }}@${newTag}\n\`\`\`\n\n`;
-            
-            // Create the release
-            const release = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: newTag,
-              name: `${newTag} - ${{ steps.verify_file.outputs.workflow_name }}`,
-              body: releaseNotes,
-              draft: false,
-              prerelease: false
-            });
-            
-            // Upload the workflow file as an asset
-            const uploadUrl = release.data.upload_url;
-            const fileName = workflowFile.split('/').pop();
-            
-            // Create a temporary file with the content
-            fs.writeFileSync(fileName, workflowContent);
-            
-            // Upload to release
-            await github.rest.repos.uploadReleaseAsset({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: release.data.id,
-              name: fileName,
-              data: fs.readFileSync(fileName)
-            });
-            
-            return release.data.html_url;
-          result-encoding: string
-
-      - name: Display release URL
-        run: |
-          echo "Release created successfully at: ${{ steps.create_release.outputs.result }}"
+          tag_name: ${{ steps.semver.outputs.new_tag }}
+          name: ${{ steps.semver.outputs.new_tag }}
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
