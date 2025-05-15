@@ -17,6 +17,9 @@ on:
           - major
         default: 'patch'
 
+permissions:
+  contents: write # Required to push tags and create releases
+
 jobs:
   tag-and-release:
     runs-on: ubuntu-latest
