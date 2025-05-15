@@ -1,0 +1,13 @@
+# Example usage for reusable-terraform-test.yml
+name: Example Call for Reusable Terraform Test Workflow
+
+on:
+  workflow_call:
+
+jobs:
+  call-terraform-test:
+    uses: ac-on-ac/workflow-templates/.github/workflows/reusable-terraform-test.yml@v1.0.0 # Replace version with latest or desired version
+    with:
+      test_directory: tests
+    secrets:
+      azure_credentials: ${{ secrets.AZURE_CREDENTIALS }}

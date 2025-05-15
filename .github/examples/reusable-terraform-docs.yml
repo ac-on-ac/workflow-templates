@@ -1,0 +1,12 @@
+# Example usage for reusable-terraform-docs.yml
+name: Example Call for Reusable Terraform Docs Workflow
+
+on:
+  workflow_call:
+
+jobs:
+  call-terraform-docs:
+    uses: ac-on-ac/workflow-templates/.github/workflows/reusable-terraform-docs.yml@terraform-docs-v1.0.0 # Replace version with latest or desired version
+    with:
+      terraform_docs_config_file: .terraform-docs.yml # This is the default value; if this is not needed, you can remove this line
+      working_directory: . # This is the default value; if this is not needed, you can remove this line
