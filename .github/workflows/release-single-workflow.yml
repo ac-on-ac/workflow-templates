@@ -87,7 +87,7 @@ jobs:
           esac
           
           NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
-          NEW_TAG="${{ steps.get-latest-tag.outputs.tag_prefix }}${NEW_VERSION}"
+          NEW_TAG="${{ steps.get-latest-tag.outputs.tag_prefix }}v${NEW_VERSION}"
           
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
@@ -99,10 +99,9 @@ jobs:
           git push origin ${{ steps.semver.outputs.new_tag }}
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.semver.outputs.new_tag }}
-          name: ${{ steps.semver.outputs.new_tag }}
-          draft: false
-          prerelease: false
-          token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ steps.semver.outputs.new_tag }} \
+            --title "${{ steps.semver.outputs.new_tag }}" \
+            --notes "Release for version ${{ steps.semver.outputs.new_tag }}"
