@@ -142,25 +142,33 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXAMPLE_CONTENT: ${{ needs.verify-workflow-file.outputs.example_content }}
+          EXAMPLE_EXISTS: ${{ needs.verify-workflow-file.outputs.example_exists }}
         with:
           script: |
             const tagName = '${{ needs.create-new-tag.outputs.new_tag }}';
-            const releaseName = `Release ${tagName}`;
-            let fileContent = process.env.EXAMPLE_CONTENT || '';
-            
-            // Remove possible leading/trailing EOF markers
-            fileContent = fileContent.replace(/^EOF\n|\nEOF$/g, '');
-            const body = `Example call of this workflow:\n\n\u0060\u0060\u0060YAML\n${fileContent}\n\u0060\u0060\u0060`;
-            
+            const releaseName = tagName;
+            const exampleExists = process.env.EXAMPLE_EXISTS === 'true';
+            let body;
+
+            // Create the body of the release note
+            if (exampleExists) {
+              let fileContent = process.env.EXAMPLE_CONTENT || '';
+              // Remove possible leading/trailing EOF markers
+              fileContent = fileContent.replace(/^EOF\n|\nEOF$/g, '');
+              body = `Example call of this workflow:\n\n\u0060\u0060\u0060YAML\n${fileContent}\n\u0060\u0060\u0060`;
+            } else {
+              body = 'No example file was provided for this workflow.';
+            }
+
             // Check if the release for the tag already exists
             const existingRelease = await github.rest.repos.getReleaseByTag({
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag: tagName
             }).catch(() => null);
-
+            
+            // If it exists, update it; otherwise, create a new release
             if (existingRelease) {
-              // Update the existing release
               await github.rest.repos.updateRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -169,7 +177,6 @@ jobs:
                 body: body
               });
             } else {
-              // Create a new release
               await github.rest.repos.createRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
