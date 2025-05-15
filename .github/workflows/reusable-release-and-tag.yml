@@ -163,7 +163,7 @@ jobs:
           echo "pr_info=$pr_info" >> $GITHUB_OUTPUT
 
       - name: Create or Update GitHub release
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
             const newTag = '${{ steps.determine_version.outputs.new_tag }}';

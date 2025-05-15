@@ -1,0 +1,14 @@
+name: Example Using Release and Tag Workflow
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  call_reusable_workflow:
+    uses: ac-on-ac/workflow-templates/.github/workflows/reusable-release-and-tag.yml@release-and-tag-v1.0.0 # Replace version with latest or desired version
+    if: github.event.pull_request.merged == true
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      pr_merged: ${{ github.event.pull_request.merged }}

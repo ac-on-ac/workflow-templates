@@ -21,7 +21,115 @@ permissions:
   contents: write # Required to push tags and create releases
 
 jobs:
-  tag-and-release:
+  verify-workflow-file:
+    runs-on: ubuntu-latest
+    outputs:
+      example_exists: ${{ steps.check_example_file.outputs.example_exists }}
+      example_content: ${{ steps.check_example_file.outputs.example_content }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check if workflow file exists
+        id: check_file
+        run: |
+          if [ -f ".github/workflows/${{ github.event.inputs.workflow_file }}" ]; then
+            echo "Workflow file found: .github/workflows/${{ github.event.inputs.workflow_file }}"
+          else
+            echo "Error: Workflow file '.github/workflows/${{ github.event.inputs.workflow_file }}' does not exist. Please check the file name and try again."
+            exit 1
+          fi
+          
+      - name: Check if example file exists
+        id: check_example_file
+        run: |
+          if [ -f ".github/examples/${{ github.event.inputs.workflow_file }}" ]; then
+            echo "example_exists=true" >> $GITHUB_OUTPUT
+            # Read the file content and properly escape it for GitHub Actions output
+            CONTENT=$(cat .github/examples/${{ github.event.inputs.workflow_file }})
+            # Use EOF delimiter to handle multi-line content with special characters
+            echo "example_content<<EOF" >> $GITHUB_OUTPUT
+            echo "$CONTENT" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            echo "Example file found: .github/examples/${{ github.event.inputs.workflow_file }}"
+          else
+            echo "example_exists=false" >> $GITHUB_OUTPUT
+            echo "Example file '.github/examples/${{ github.event.inputs.workflow_file }}' does not exist."
+          fi
+
+  create-new-tag:
+    needs: verify-workflow-file
+    runs-on: ubuntu-latest
+    outputs:
+      new_tag: ${{ steps.create_and_push_tag.outputs.new_tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for tags and branches
+
+      - name: Setup git user
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+
+      - name: Get current tag
+        id: get_current_tag
+        run: |
+          # Remove 'reusable-' prefix and file extension from the workflow file name
+          base_name="${{ github.event.inputs.workflow_file }}"
+          base_name="${base_name#reusable-}"
+          base_name="${base_name%.*}"
+          # Find the latest tag matching the pattern
+          current_tag=$(git tag --list "${base_name}-v*" --sort=-v:refname | head -n 1)
+          if [ -z "$current_tag" ]; then
+            echo "No tag found for pattern: ${base_name}-v*"
+          else
+            echo "Current tag: $current_tag"
+            echo "current_tag=$current_tag" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Calculate new tag
+        id: calculate_new_tag
+        run: |
+          base_name="${{ github.event.inputs.workflow_file }}"
+          base_name="${base_name#reusable-}"
+          base_name="${base_name%.*}"
+          version_type="${{ github.event.inputs.version_type }}"
+          current_tag="${{ steps.get_current_tag.outputs.current_tag }}"
+          if [ -z "$current_tag" ]; then
+            # No existing tag, start at v1.0.0
+            new_version="1.0.0"
+          else
+            # Extract version part (assumes format: <basename>-v<semver>)
+            version_part="${current_tag##*-v}"
+            IFS='.' read -r major minor patch <<< "$version_part"
+            case "$version_type" in
+              major)
+                major=$((major+1)); minor=0; patch=0;;
+              minor)
+                minor=$((minor+1)); patch=0;;
+              patch|*)
+                patch=$((patch+1));;
+            esac
+            new_version="$major.$minor.$patch"
+          fi
+          new_tag="${base_name}-v${new_version}"
+          echo "New tag: $new_tag"
+          echo "new_tag=$new_tag" >> $GITHUB_OUTPUT
+
+      - name: Create and push new tag
+        id: create_and_push_tag
+        run: |
+          new_tag="${{ steps.calculate_new_tag.outputs.new_tag }}"
+          # Tag the current commit
+          git tag "$new_tag"
+          # Push the tag to the remote repository
+          git push origin "$new_tag"
+          echo "new_tag=$new_tag" >> $GITHUB_OUTPUT
+
+  create-new-release:
+    needs: [create-new-tag, verify-workflow-file]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -29,92 +137,47 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check if workflow file exists
-        id: check-file
-        run: |
-          WORKFLOW_FILE="${{ github.event.inputs.workflow_file }}"
-          WORKFLOW_PATH=".github/workflows/${WORKFLOW_FILE}"
-          
-          if [[ ! -f "$WORKFLOW_PATH" ]]; then
-            echo "::error::Workflow file '$WORKFLOW_FILE' not found in .github/workflows/ directory. Please check the file name and try again."
-            exit 1
-          else
-            echo "Workflow file '$WORKFLOW_FILE' found. Proceeding with release."
-          fi
-
-      - name: Setup Git User
-        run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-
-      - name: Get Workflow Name
-        id: workflow-name
-        run: |
-          WORKFLOW_FILE=${{ github.event.inputs.workflow_file }}
-          WORKFLOW_NAME=$(basename "$WORKFLOW_FILE" .yml)
-          CLEAN_NAME=${WORKFLOW_NAME/reusable-/}
-          echo "clean_name=$CLEAN_NAME" >> $GITHUB_OUTPUT
-          echo "Working with workflow: $CLEAN_NAME"
-
-      - name: Get Latest Tag
-        id: get-latest-tag
-        run: |
-          TAG_PREFIX="${{ steps.workflow-name.outputs.clean_name }}-"
-          
-          # Fetch all tags that match the prefix
-          LATEST_TAG=$(git tag -l "${TAG_PREFIX}*" | sort -V | tail -n 1)
-          
-          if [ -z "$LATEST_TAG" ]; then
-            echo "No previous tag found. Starting with v0.0.0"
-            CURRENT_VERSION="0.0.0"
-          else
-            CURRENT_VERSION=${LATEST_TAG#$TAG_PREFIX}
-            CURRENT_VERSION=${CURRENT_VERSION#v}
-            echo "Latest tag found: $LATEST_TAG with version $CURRENT_VERSION"
-          fi
-          
-          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-          echo "tag_prefix=$TAG_PREFIX" >> $GITHUB_OUTPUT
-
-      - name: Calculate New Version
-        id: semver
-        run: |
-          CURRENT_VERSION=${{ steps.get-latest-tag.outputs.current_version }}
-          VERSION_TYPE=${{ github.event.inputs.version_type }}
-          
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-          
-          case "$VERSION_TYPE" in
-            major)
-              MAJOR=$((MAJOR + 1))
-              MINOR=0
-              PATCH=0
-              ;;
-            minor)
-              MINOR=$((MINOR + 1))
-              PATCH=0
-              ;;
-            patch)
-              PATCH=$((PATCH + 1))
-              ;;
-          esac
-          
-          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
-          NEW_TAG="${{ steps.get-latest-tag.outputs.tag_prefix }}v${NEW_VERSION}"
-          
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
-          echo "New version will be: $NEW_VERSION with tag $NEW_TAG"
-
-      - name: Create and Push Tag
-        run: |
-          git tag ${{ steps.semver.outputs.new_tag }}
-          git push origin ${{ steps.semver.outputs.new_tag }}
-
-      - name: Create GitHub Release
+      - name: Create or Update GitHub Release
+        uses: actions/github-script@v7
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create ${{ steps.semver.outputs.new_tag }} \
-            --title "${{ steps.semver.outputs.new_tag }}" \
-            --notes "Release for version ${{ steps.semver.outputs.new_tag }}"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXAMPLE_CONTENT: ${{ needs.verify-workflow-file.outputs.example_content }}
+        with:
+          script: |
+            const tagName = '${{ needs.create-new-tag.outputs.new_tag }}';
+            const releaseName = `Release ${tagName}`;
+            let fileContent = process.env.EXAMPLE_CONTENT || '';
+            
+            // Remove possible leading/trailing EOF markers
+            fileContent = fileContent.replace(/^EOF\n|\nEOF$/g, '');
+            const body = `Example call of this workflow:\n\n\u0060\u0060\u0060YAML\n${fileContent}\n\u0060\u0060\u0060`;
+            
+            // Check if the release for the tag already exists
+            const existingRelease = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag: tagName
+            }).catch(() => null);
+
+            if (existingRelease) {
+              // Update the existing release
+              await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: existingRelease.data.id,
+                name: releaseName,
+                body: body
+              });
+            } else {
+              // Create a new release
+              await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: tagName,
+                name: releaseName,
+                body: body,
+                draft: false,
+                prerelease: false
+              });
+            }
+          result-encoding: string
