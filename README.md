@@ -14,24 +14,6 @@ This repository supports creating releases for individual workflow files, allowi
 
 See [Releasing Individual Workflows](docs/releasing-workflows.md) for details on how to create and use versioned workflows.
 
-## Releasing Workflows
-
-To release a new version of a reusable workflow, use the "Release Single Workflow" GitHub Actions workflow.
-
-1.  **Navigate to the Actions tab** of the `workflow-templates` repository.
-2.  **Select the "Release Single Workflow"** workflow from the list.
-3.  **Click "Run workflow"**.
-4.  **Enter the filename of the workflow** you want to release (e.g., `reusable-terraform-plan.yml`) in the "Workflow file name" input.
-5.  **Choose the version type** (patch, minor, or major) for the release.
-6.  **Click "Run workflow"**.
-
-This will trigger the workflow to:
-    - Determine the current version of the specified workflow.
-    - Calculate the next semantic version based on your input.
-    - Create a new Git tag in the format `<workflow-base-name>-v<new-version>`.
-    - Push the new tag to the repository.
-    - Create (or update if it already exists) a GitHub Release associated with the new tag.
-
 ### Example Workflow Call Files
 
 It is highly recommended to include an example of how to call your reusable workflow. Create a YAML file in the `.github/examples/` directory with the same name as your workflow file (e.g., if your workflow is `.github/workflows/reusable-terraform-plan.yml`, the example file should be `.github/examples/reusable-terraform-plan.yml`).
