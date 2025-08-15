@@ -1,0 +1,259 @@
+# Terraform Plan Workflow with Azure Backend
+# 
+# This workflow runs Terraform plan with state stored in Azure Storage.
+# For private repository access, store a GitHub SSH key in your Azure Key Vault:
+#
+# 1. Generate an SSH key pair without passphrase:
+#    ssh-keygen -t rsa -b 4096 -f github_ssh_key -N ""
+#
+# 2. Add the public key (github_ssh_key.pub) to your GitHub account or repository deploy keys
+#
+# 3. Base64 encode the private key and store in Azure Key Vault:
+#    cat github_ssh_key | base64 | tr -d '\n' | az keyvault secret set --vault-name <your-vault> --name "github-ssh-key" --value -
+
+name: Terraform Plan
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: 'Directory where Terraform files are located'
+        required: true
+        type: string
+      storage-account-name:
+        description: 'Azure Storage Account name for Terraform state'
+        required: true
+        type: string
+      container-name:
+        description: 'Azure Storage container name for Terraform state'
+        required: true
+        type: string
+      resource-group-name:
+        description: 'Azure Resource Group name for Storage Account'
+        required: true
+        type: string
+      key-vault-name:
+        description: 'Azure Key Vault name for secrets'
+        required: true
+        type: string
+      admin-username:
+        description: 'Admin username for resources'
+        required: false
+        type: string
+    secrets:
+      AZURE_CLIENT_ID:
+        description: 'Azure Client ID for OIDC authentication'
+        required: true
+      AZURE_TENANT_ID:
+        description: 'Azure Tenant ID for OIDC authentication'
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        description: 'Azure Subscription ID for OIDC authentication'
+        required: true
+      ADMIN_PASSWORD:
+        description: 'Admin password for resources'
+        required: false
+
+env:
+  TF_LOG: INFO
+
+permissions:
+  id-token: write
+  issues: write
+  pull-requests: write
+  contents: read
+
+jobs:
+  terraform-plan:
+    runs-on: ubuntu-latest
+    steps:
+      # Log into Azure with OIDC
+      - name: 'Az CLI login'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Run az commands to confirm subscription access
+      - name: 'Confirm Azure subscription access'
+        run: |
+          az account show
+
+      # Checkout the repository to the GitHub Actions runner
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Configure SSH for private repository access
+      - name: Configure SSH for Private Repositories
+        if: inputs.key-vault-name != ''
+        id: ssh-setup
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            echo "Setting up SSH access for private repositories..."
+            
+            # Create SSH directory
+            mkdir -p ~/.ssh
+            chmod 700 ~/.ssh
+            
+            # Try to retrieve SSH key from Key Vault
+            echo "Checking for SSH key in Key Vault ${{ inputs.key-vault-name }}..."
+            FOUND_KEY=false
+            
+            if az keyvault secret show --name "github-ssh-key" --vault-name "${{ inputs.key-vault-name }}" &>/dev/null; then
+              echo "SSH key found with name 'github-ssh-key', retrieving..."
+              sshkey=$(az keyvault secret show --name "github-ssh-key" --vault-name "${{ inputs.key-vault-name }}" --query "value" -o tsv)
+              echo "$sshkey" | base64 -d > ~/.ssh/id_rsa
+              FOUND_KEY=true
+            elif az keyvault secret show --name "idrsa" --vault-name "${{ inputs.key-vault-name }}" &>/dev/null; then
+              echo "SSH key found with name 'idrsa', retrieving..."
+              sshkey=$(az keyvault secret show --name "idrsa" --vault-name "${{ inputs.key-vault-name }}" --query "value" -o tsv)
+              echo "$sshkey" | base64 -d > ~/.ssh/id_rsa
+              FOUND_KEY=true
+            else
+              echo "::warning::No SSH key found in Key Vault. Private repositories might not be accessible."
+              exit 0
+            fi
+            
+            # If key was found, set up SSH properly
+            if [ "$FOUND_KEY" = true ]; then
+              # Set proper permissions
+              chmod 600 ~/.ssh/id_rsa
+              
+              # Add GitHub domains to known hosts
+              ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+              ssh-keyscan -t rsa ssh.github.com >> ~/.ssh/known_hosts
+              chmod 644 ~/.ssh/known_hosts
+              
+              # Create SSH config
+              cat > ~/.ssh/config << EOF
+            Host github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa
+              StrictHostKeyChecking no
+            
+            Host ssh.github.com
+              User git
+              IdentityFile ~/.ssh/id_rsa
+              StrictHostKeyChecking no
+            EOF
+              chmod 600 ~/.ssh/config
+              
+              # Start SSH agent and add the key
+              eval "$(ssh-agent -s)"
+              ssh-add ~/.ssh/id_rsa
+              
+              # Configure Git to use SSH instead of HTTPS
+              git config --global url."git@github.com:".insteadOf "https://github.com/"
+              
+              # Test connection
+              echo "Testing SSH connection to GitHub..."
+              ssh -T git@github.com -o StrictHostKeyChecking=no || true
+              echo "SSH access configured successfully"
+              
+              # Create Terraform CLI config for SSH access
+              mkdir -p $HOME/.terraform.d
+              cat > $HOME/.terraform.d/credentials.tfrc.json << EOF
+            {
+              "credentials": {
+                "git": {
+                  "helper": "!f() { echo username=git; echo password=; }; f"
+                }
+              }
+            }
+            EOF
+            fi
+
+      # Install Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.11.1
+
+      # Initialize Terraform
+      - name: Terraform Init
+        id: init
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          STORAGE_ACCOUNT: ${{ inputs.storage-account-name }}
+          CONTAINER_NAME: ${{ inputs.container-name }}
+          RESOURCE_GROUP_NAME: ${{ inputs.resource-group-name }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          # Set environment variables for private module access
+          GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=no -i $HOME/.ssh/id_rsa"
+          TF_CLI_ARGS_init: "-no-color"
+        run: |
+          # Initialize Terraform
+          echo "Running terraform init..."
+          terraform init \
+            -backend-config="storage_account_name=$STORAGE_ACCOUNT" \
+            -backend-config="container_name=$CONTAINER_NAME" \
+            -backend-config="resource_group_name=$RESOURCE_GROUP_NAME" \
+            -upgrade
+            
+          echo "Terraform initialization complete"
+
+      # Format Check
+      - name: Terraform Format Check
+        id: fmt
+        working-directory: ${{ inputs.working-directory }}
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      # Validate
+      - name: Terraform Validate
+        id: validate
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: terraform validate -no-color
+
+      # Plan
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          # Set environment variables for private module access
+          GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=no -i $HOME/.ssh/id_rsa"
+          TF_CLI_ARGS_plan: "-no-color"
+        run: |
+          # Run terraform plan
+          echo "Running terraform plan..."
+          terraform plan -no-color -var="admin_username=${{ inputs.admin-username }}" -var="admin_password=${{ secrets.ADMIN_PASSWORD }}" -out=tfplan
+
+      # Add a comment to pull requests with plan results
+      - name: Add Plan Comment to PR
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        env:
+          PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const output = `#### Terraform Format and Style \`${{ steps.fmt.outcome }}\`
+            #### Terraform Initialization \`${{ steps.init.outcome }}\`
+            #### Terraform Validation \`${{ steps.validate.outcome }}\`
+            #### Terraform Plan \`${{ steps.plan.outcome }}\`
+            
+            <details><summary>Show Plan</summary>
+            
+            \`\`\`${process.env.PLAN}\`\`\`
+            
+            </details>
+            
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Workflow: \`${{ github.workflow }}\`*`;
+              
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
