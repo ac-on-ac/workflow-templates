@@ -29,10 +29,10 @@ jobs:
       - name: Find and categorize test files
         id: find
         run: |
-          # Find all test files and categorize them
-          validation_tests=$(find ${{ inputs.test_directory }} -name "validation-*.tftest.hcl" | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0))')
-          unit_tests=$(find ${{ inputs.test_directory }} -name "unit-*.tftest.hcl" | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0))')
-          integration_tests=$(find ${{ inputs.test_directory }} -name "integration-*.tftest.hcl" | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          # Find all test files and categorize them, sorting alphabetically
+          validation_tests=$(find ${{ inputs.test_directory }} -name "validation-*.tftest.hcl" | sort | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0)) | sort')
+          unit_tests=$(find ${{ inputs.test_directory }} -name "unit-*.tftest.hcl" | sort | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0)) | sort')
+          integration_tests=$(find ${{ inputs.test_directory }} -name "integration-*.tftest.hcl" | sort | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0)) | sort')
           
           echo "validation_tests=$validation_tests" >> $GITHUB_OUTPUT
           echo "unit_tests=$unit_tests" >> $GITHUB_OUTPUT
@@ -82,7 +82,7 @@ jobs:
           
           if [ -n "$validation_tests" ]; then
             echo "======= RUNNING VALIDATION TESTS ======="
-            for test_file in $validation_tests; do
+            echo '${{ needs.find-test-files.outputs.validation_tests }}' | jq -r '.[]' | sort | while read test_file; do
               echo "-------------------------------------------"
               echo "Running validation test: $test_file"
               # Run the test with proper filter format
@@ -99,7 +99,7 @@ jobs:
           
           if [ -n "$unit_tests" ]; then
             echo "======= RUNNING UNIT TESTS ======="
-            for test_file in $unit_tests; do
+            echo '${{ needs.find-test-files.outputs.unit_tests }}' | jq -r '.[]' | sort | while read test_file; do
               echo "-------------------------------------------"
               echo "Running unit test: $test_file"
               # Run the test with proper filter format
@@ -116,7 +116,7 @@ jobs:
           
           if [ -n "$integration_tests" ]; then
             echo "======= RUNNING INTEGRATION TESTS ======="
-            for test_file in $integration_tests; do
+            echo '${{ needs.find-test-files.outputs.integration_tests }}' | jq -r '.[]' | sort | while read test_file; do
               echo "-------------------------------------------"
               echo "Running integration test: $test_file"
               # Run the test with proper filter format
