@@ -13,7 +13,30 @@ on:
         type: string
     secrets:
       azure_credentials:
-        required: true
+        # CHANGED in v2.0.0 — was required: true in v1.x.
+        # Now optional. Callers that previously passed this secret are unaffected.
+        # Callers that could not use this workflow because they had no Azure
+        # credentials (TFC-only, mock-only, Cloudflare, etc.) can now omit it.
+        required: false
+      terraform_token:
+        # CHANGED in v2.0.0 — previously only scoped to the Terraform Init step.
+        # Now applied at the job level, so the token is also available during all
+        # terraform test invocations. Existing callers are unaffected; integration
+        # tests against app.terraform.io that previously failed to authenticate
+        # during terraform test will now succeed.
+        required: false
+      databricks_host:
+        # NEW in v2.0.0 — not available in v1.x.
+        # Workspace URL for the Databricks provider (maps to DATABRICKS_HOST).
+        # Must be paired with azure_credentials and databricks_azure_workspace_resource_id
+        # for Azure Databricks authentication.
+        required: false
+      databricks_azure_workspace_resource_id:
+        # NEW in v2.0.0 — not available in v1.x.
+        # Full Azure resource ID of the Databricks workspace
+        # (maps to DATABRICKS_AZURE_RESOURCE_ID). Required alongside databricks_host
+        # and azure_credentials for Azure Databricks authentication.
+        required: false
 
 jobs:
   find-test-files:
@@ -24,30 +47,30 @@ jobs:
       integration_tests: ${{ steps.find.outputs.integration_tests }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v6
 
       - name: Find and categorize test files
         id: find
         run: |
-          # Find all test files and categorize them, sorting alphabetically
-          validation_tests=$(find ${{ inputs.test_directory }} -name "validation-*.tftest.hcl" | sort | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0)) | sort')
-          unit_tests=$(find ${{ inputs.test_directory }} -name "unit-*.tftest.hcl" | sort | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0)) | sort')
-          integration_tests=$(find ${{ inputs.test_directory }} -name "integration-*.tftest.hcl" | sort | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0)) | sort')
-          
+          # Find all test files and categorize them
+          validation_tests=$(find ${{ inputs.test_directory }} -name "validation-*.tftest.hcl" | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          unit_tests=$(find ${{ inputs.test_directory }} -name "unit-*.tftest.hcl" | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          integration_tests=$(find ${{ inputs.test_directory }} -name "integration-*.tftest.hcl" | xargs -I{} basename {} .tftest.hcl | jq -R -s -c 'split("\n") | map(select(length > 0))')
+
           echo "validation_tests=$validation_tests" >> $GITHUB_OUTPUT
           echo "unit_tests=$unit_tests" >> $GITHUB_OUTPUT
           echo "integration_tests=$integration_tests" >> $GITHUB_OUTPUT
-          
+
           echo "Validation tests: $validation_tests"
           echo "Unit tests: $unit_tests" 
           echo "Integration tests: $integration_tests"
-          
+
           # Check if any test files were found
           all_validation_count=$(echo $validation_tests | jq '. | length')
           all_unit_count=$(echo $unit_tests | jq '. | length')
           all_integration_count=$(echo $integration_tests | jq '. | length')
           total_test_count=$((all_validation_count + all_unit_count + all_integration_count))
-          
+
           if [ "$total_test_count" -eq 0 ]; then
             echo "ERROR: No test files were found matching any pattern (validation-*.tftest.hcl, unit-*.tftest.hcl, integration-*.tftest.hcl)"
             echo "Please ensure test files are properly named and located in the tests directory."
@@ -59,16 +82,19 @@ jobs:
   terraform-test:
     needs: find-test-files
     runs-on: ubuntu-latest
+    env:
+      TF_TOKEN_app_terraform_io: ${{ secrets.terraform_token }}
+      AZURE_CREDENTIALS: ${{ secrets.azure_credentials }}
+      DATABRICKS_HOST: ${{ secrets.databricks_host }}
+      DATABRICKS_AZURE_RESOURCE_ID: ${{ secrets.databricks_azure_workspace_resource_id }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
-
+        uses: actions/checkout@v6
       - name: Install Terraform
         uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.9.5
-        
+
       - name: Azure Login
+        if: env.AZURE_CREDENTIALS != ''
         uses: azure/login@v2.2.0
         with:
           creds: ${{ secrets.azure_credentials }}
@@ -78,14 +104,14 @@ jobs:
 
       - name: Run Validation Tests
         run: |
-          validation_tests=$(echo '${{ needs.find-test-files.outputs.validation_tests }}' | jq -r '.[]' 2>/dev/null || echo "")
-          
+          validation_tests=$(echo '${{ needs.find-test-files.outputs.validation_tests }}' | jq -r '.[]' 2>/dev/null | sort || echo "")
+
           if [ -n "$validation_tests" ]; then
             echo "======= RUNNING VALIDATION TESTS ======="
-            echo '${{ needs.find-test-files.outputs.validation_tests }}' | jq -r '.[]' | sort | while read test_file; do
+            for test_file in $validation_tests; do
               echo "-------------------------------------------"
               echo "Running validation test: $test_file"
-              # Run the test with proper filter format
+              # Run terraform test command with the test file
               terraform test -filter="${{ inputs.test_directory }}/${test_file}.tftest.hcl"
               echo "-------------------------------------------"
             done
@@ -95,14 +121,14 @@ jobs:
 
       - name: Run Unit Tests
         run: |
-          unit_tests=$(echo '${{ needs.find-test-files.outputs.unit_tests }}' | jq -r '.[]' 2>/dev/null || echo "")
-          
+          unit_tests=$(echo '${{ needs.find-test-files.outputs.unit_tests }}' | jq -r '.[]' 2>/dev/null | sort || echo "")
+
           if [ -n "$unit_tests" ]; then
             echo "======= RUNNING UNIT TESTS ======="
-            echo '${{ needs.find-test-files.outputs.unit_tests }}' | jq -r '.[]' | sort | while read test_file; do
+            for test_file in $unit_tests; do
               echo "-------------------------------------------"
               echo "Running unit test: $test_file"
-              # Run the test with proper filter format
+              # Run terraform test command with the test file
               terraform test -filter="${{ inputs.test_directory }}/${test_file}.tftest.hcl"
               echo "-------------------------------------------"
             done
@@ -112,14 +138,14 @@ jobs:
 
       - name: Run Integration Tests
         run: |
-          integration_tests=$(echo '${{ needs.find-test-files.outputs.integration_tests }}' | jq -r '.[]' 2>/dev/null || echo "")
-          
+          integration_tests=$(echo '${{ needs.find-test-files.outputs.integration_tests }}' | jq -r '.[]' 2>/dev/null | sort || echo "")
+
           if [ -n "$integration_tests" ]; then
             echo "======= RUNNING INTEGRATION TESTS ======="
-            echo '${{ needs.find-test-files.outputs.integration_tests }}' | jq -r '.[]' | sort | while read test_file; do
+            for test_file in $integration_tests; do
               echo "-------------------------------------------"
               echo "Running integration test: $test_file"
-              # Run the test with proper filter format
+              # Run terraform test command with the test file
               terraform test -filter="${{ inputs.test_directory }}/${test_file}.tftest.hcl"
               echo "-------------------------------------------"
             done
