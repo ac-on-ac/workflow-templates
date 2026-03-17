@@ -1,153 +1,168 @@
-# Reusable Release and Tag Workflow
+# Reusable Terraform Docs Workflow
 
-This document provides an overview of the reusable GitHub Actions workflow for automatically creating semantic versioned releases and tags based on pull request information.
+This document provides an overview of the reusable GitHub Actions workflow for automatically generating documentation for Terraform modules.
 
 ## Purpose
 
-The `reusable-release-and-tag.yml` workflow automates the process of creating new version tags and GitHub releases when pull requests are merged. It follows semantic versioning principles based on the PR title prefix, allowing for consistent and predictable versioning across your repositories. It supports both stable releases and release candidates.
+The `reusable-terraform-docs.yml` workflow automates the process of generating and updating documentation for Terraform modules using the [terraform-docs](https://terraform-docs.io/) tool. It ensures your README files are always up-to-date and consistent with your Terraform code, including inputs, outputs, providers, and requirements.
 
 This workflow is designed to:
 
-1. Enforce semantic versioning practices
-2. Automate the release and tagging process
-3. Create consistent release notes from PR descriptions
-4. Ensure version numbers are incremented appropriately based on change type
-5. Support pre-release (release candidate) workflows before committing to a stable version
+1. Enforce consistent and accurate module documentation
+2. Automate the documentation update process
+3. Reduce manual documentation effort
+4. Integrate documentation generation into your CI/CD pipeline
 
 ## Workflow Inputs
 
-| Input | Required | Description |
-|-------|----------|-------------|
-| `pr_number` | Yes | The pull request number that triggered the workflow |
-| `pr_merged` | Yes | Boolean indicating whether the PR was merged or not |
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `terraform_docs_config_file` | No | `.terraform-docs.yml` | Path to the terraform-docs configuration file |
+| `working_directory` | No | `.` (repository root) | Directory to generate docs in |
+
+## Workflow Secrets
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `token` | No | GitHub token used to commit and push documentation changes. Pass a Personal Access Token (PAT) with `contents:write` permission to allow the terraform-docs commit to re-trigger downstream CI workflows on the updated PR HEAD. If omitted, falls back to `GITHUB_TOKEN`, which will **not** re-trigger workflows — required status checks will show as "Waiting for status to be reported" after the docs commit. See [CI Re-triggering](#ci-re-triggering) below. |
 
 ## Workflow Outputs
 
-| Output | Description |
-|--------|-------------|
-| `new_tag` | The newly created version tag (e.g. `v1.2.3` or `v1.3.0-rc.1`) |
+This workflow does not produce explicit outputs, but it updates your documentation files (such as `README.md`) in the repository.
 
 ## Permissions
 
 The workflow requires the following permissions:
-- `pull-requests: read`: Allows reading PR information
-- `contents: write`: Allows creating tags and releases
+- `contents: write`: Allows writing to the repository content
+- `pull-requests: write`: Allows writing to pull requests
 
 ## Workflow Process
 
 The workflow consists of a single job that:
 
-1. Checks if the PR was merged (exits if not)
-2. Fetches all repository history and tags
-3. Gets the latest existing **stable** tag, ignoring any release candidate (`-rc.*`) tags
-4. Extracts the semantic version numbers from the latest stable tag
-5. Retrieves the pull request title and description
-6. Validates the PR title format (must begin with one of the accepted prefixes — see [PR Title Requirements](#pr-title-requirements))
-7. Determines the new version based on:
-   - The latest stable tag (or initialises to `v0.0.1`, `v0.1.0`, or `v1.0.0` if no stable tags exist)
-   - The type of change indicated in the PR title prefix
-   - For RC prefixes: finds the highest existing RC tag for the calculated base version and increments the counter, or starts at `rc.1`
-8. Creates a new Git tag and pushes it to the repository
-9. Creates or updates a GitHub release with the PR description as release notes, marked as a pre-release if the tag contains `-rc.`
+1. Checks out the repository code with full history, using the provided `token` secret (or `GITHUB_TOKEN` if not supplied)
+2. Installs the terraform-docs tool (v0.20.0)
+3. Generates README.md files according to the configuration
+4. Removes the downloaded terraform-docs archive from the repository and runner
+5. Commits and pushes the changes back to the repository
+   - Handles potential merge conflicts automatically through direct push, rebasing, or creating a temporary branch and merging
 
-## PR Title Requirements
+## CI Re-triggering
 
-For this workflow to function correctly, pull request titles must follow this format:
+By default, GitHub Actions does not re-trigger workflows on commits made by `github-actions[bot]` (i.e. commits pushed using `GITHUB_TOKEN`). This means that when this workflow commits regenerated documentation back to the PR branch, the new commit becomes the PR HEAD with no check results — leaving required status checks in a **"Waiting for status to be reported"** state.
 
-### Stable releases
+To resolve this, pass a Personal Access Token (PAT) via the `token` secret. Commits pushed using a PAT are attributed to the PAT owner (a real user account) and **will** re-trigger workflows.
 
-| Prefix | Effect |
-|--------|--------|
-| `patch:` | Increments patch component — `v1.2.3` → `v1.2.4` |
-| `minor:` | Increments minor component, resets patch — `v1.2.3` → `v1.3.0` |
-| `major:` | Increments major component, resets minor and patch — `v1.2.3` → `v2.0.0` |
+### Setting up the PAT
 
-### Release candidates
+The token must belong to a **dedicated service/bot account**, not a personal account. If the account is deactivated or leaves the organisation, CI in every repo using this workflow will break. The account must have **Write access** to each repository that calls this workflow.
 
-| Prefix | Effect |
-|--------|--------|
-| `rc-patch:` | Next patch RC — `v1.2.3` → `v1.2.4-rc.1`, then `v1.2.4-rc.2`, ... |
-| `rc-minor:` | Next minor RC — `v1.2.3` → `v1.3.0-rc.1`, then `v1.3.0-rc.2`, ... |
-| `rc-major:` | Next major RC — `v1.2.3` → `v2.0.0-rc.1`, then `v2.0.0-rc.2`, ... |
+**Step 1 — Create the PAT on the bot account**
 
-Examples:
-- `patch: Fix a bug in subnet creation`
-- `minor: Add support for NAT gateway`
-- `major: Complete redesign of network architecture`
-- `rc-patch: Fix a bug in subnet creation (release candidate)`
-- `rc-minor: Add support for NAT gateway (release candidate)`
-- `rc-major: Complete redesign of network architecture (release candidate)`
+- **Fine-grained PAT (recommended):** GitHub → bot account Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token. Set repository access to only the repositories that use this workflow. Under Repository permissions, set **Contents: Read and write**.
+- **Classic PAT:** GitHub → bot account Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token. Check the `repo` scope.
 
-If the PR title doesn't follow this format, the workflow will fail with an error message.
+**Step 2 — Store the PAT as a repository secret**
 
-## Version Numbering
+For each repository that calls this workflow: Repository → Settings → Secrets and variables → Actions → New repository secret. Name: `TERRAFORM_DOCS_PAT`. Value: the PAT from Step 1.
 
-The workflow follows semantic versioning (MAJOR.MINOR.PATCH):
-1. MAJOR version increments for incompatible API changes
-2. MINOR version increments for backwards-compatible functionality additions
-3. PATCH version increments for backwards-compatible bug fixes
+**Step 3 — Pass the secret in your workflow call**
 
-If no stable tags exist in the repository:
-- The first `patch:` or `rc-patch:` PR creates `v0.0.1` or `v0.0.1-rc.1`
-- The first `minor:` or `rc-minor:` PR creates `v0.1.0` or `v0.1.0-rc.1`
-- The first `major:` or `rc-major:` PR creates `v1.0.0` or `v1.0.0-rc.1`
+```yaml
+secrets:
+  token: ${{ secrets.TERRAFORM_DOCS_PAT }}
+```
 
-### RC counter behaviour
+## Configuration File
 
-The RC counter increments automatically based on existing tags. If `v1.3.0-rc.2` already exists, the next `rc-minor:` PR targeting the same base version produces `v1.3.0-rc.3`. RC tags never affect the stable version baseline — stable releases always bump from the latest stable tag.
+This workflow expects a terraform-docs configuration file (by default named `.terraform-docs.yml`) in your repository. This file defines how documentation should be generated.
 
-### GitHub release pre-release flag
+Example configuration file:
 
-Releases created from RC tags are automatically marked as **pre-releases** on GitHub (`prerelease: true`). Stable releases are marked as full releases (`prerelease: false`).
+```yaml
+formatter: "markdown table"
+
+sections:
+  hide:
+    - providers
+
+content: |-
+  {{ .Header }}
+
+  {{ .Requirements }}
+
+  {{ .Inputs }}
+
+  {{ .Outputs }}
+
+  {{ .Resources }}
+
+  {{ .Modules }}
+
+output:
+  file: "README.md"
+  mode: inject
+  template: |-
+    <!-- BEGIN_TF_DOCS -->
+    {{ .Content }}
+    <!-- END_TF_DOCS -->
+```
 
 ## Example Calls
 
-To reuse this workflow in your GitHub repository, include it as a job in your workflow with one of the following patterns:
+To reuse this workflow in your GitHub repository, you can reference it in your workflow file using one of the following patterns:
 
 ### Referencing the Main Branch
 
 ```yaml
-name: Create Release
+name: Update Terraform Documentation
 
 on:
+  push:
+    branches: [ main ]
   pull_request:
-    types: [closed]
-    branches: [main]
+    branches: [ main ]
+    paths:
+      - '**.tf'
+      - '.terraform-docs.yml'
 
 jobs:
-  release:
-    if: github.event.pull_request.merged == true
-    uses: ac-on-ac/workflow-templates/.github/workflows/reusable-release-and-tag.yml@main
+  generate-docs:
+    uses: ac-on-ac/workflow-templates/.github/workflows/reusable-terraform-docs.yml@main
     with:
-      pr_number: ${{ github.event.pull_request.number }}
-      pr_merged: ${{ github.event.pull_request.merged }}
+      terraform_docs_config_file: ".terraform-docs.yml"
+      working_directory: "."
+    secrets:
+      token: ${{ secrets.TERRAFORM_DOCS_PAT }} # Optional — omit to use GITHUB_TOKEN (checks will not re-trigger)
 ```
 
 ### Referencing a Specific Release Version
 
 ```yaml
-name: Example Using Release and Tag Workflow
+name: Example Call for Reusable Terraform Docs Workflow
 
 on:
   pull_request:
-    types: [closed]
+    types: [opened, synchronize, reopened]
     branches: [main]
 
 jobs:
-  call_reusable_workflow:
-    uses: ac-on-ac/workflow-templates/.github/workflows/reusable-release-and-tag.yml@release-and-tag-v2.0.0 # Replace with desired version
-    if: github.event.pull_request.merged == true
+  call-terraform-docs:
+    uses: ac-on-ac/workflow-templates/.github/workflows/reusable-terraform-docs.yml@terraform-docs-v2.0.0 # Replace with desired version
     with:
-      pr_number: ${{ github.event.pull_request.number }}
-      pr_merged: ${{ github.event.pull_request.merged }}
+      terraform_docs_config_file: .terraform-docs.yml
+      working_directory: .
+    secrets:
+      token: ${{ secrets.TERRAFORM_DOCS_PAT }} # Optional — omit to use GITHUB_TOKEN (checks will not re-trigger)
 ```
 
 ## Best Practices
 
-1. Include detailed descriptions in your pull requests, as these become your release notes
-2. Use the appropriate prefix in your PR title to indicate the type of change
-3. Use `rc-*` prefixes to publish pre-releases for validation before promoting to a stable version
-4. Consider using the workflow's `new_tag` output to reference the newly created tag in subsequent steps
+1. Include a `.terraform-docs.yml` file in your Terraform module repository
+2. Add a trigger to your workflow that runs when Terraform files change
+3. Configure the workflow to run as part of your pull request process
+4. Use comment markers in your README.md to specify where generated documentation should be injected
+5. Set up the `TERRAFORM_DOCS_PAT` secret to ensure required status checks re-trigger after the docs commit
 
 ---
 
