@@ -1,0 +1,41 @@
+name: Reusable Check PR Title Format
+
+on:
+  workflow_call:
+
+jobs:
+  validate-pr-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get PR title
+        id: get_pr_title
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number
+            });
+            return data.title;
+          result-encoding: string
+
+      - name: Validate PR title format
+        run: |
+          pr_title="${{ steps.get_pr_title.outputs.result }}"
+          echo "Checking PR title: '$pr_title'"
+          if [[ "$pr_title" == patch:* ]] || [[ "$pr_title" == minor:* ]] || [[ "$pr_title" == major:* ]] || \
+             [[ "$pr_title" == rc-patch:* ]] || [[ "$pr_title" == rc-minor:* ]] || [[ "$pr_title" == rc-major:* ]]; then
+            echo "✅ PR title format is valid."
+          else
+            echo "::error::❌ Invalid PR title format: '$pr_title'."
+            echo "PR title must start with one of: 'patch:', 'minor:', 'major:', 'rc-patch:', 'rc-minor:', or 'rc-major:'."
+            echo "Examples of valid PR titles:"
+            echo "  - patch: Fix output variable typo in vnet module"
+            echo "  - minor: Add support for private endpoint in storage module"
+            echo "  - major: Upgrade to new major provider version"
+            echo "  - rc-patch: Fix output variable typo in vnet module (release candidate)"
+            echo "  - rc-minor: Add support for private endpoint in storage module (release candidate)"
+            echo "  - rc-major: Upgrade to new major provider version (release candidate)"
+            exit 1
+          fi
