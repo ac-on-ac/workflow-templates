@@ -29,7 +29,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0  # Fetch all history and tags
 
@@ -39,7 +39,8 @@ jobs:
       - name: Get the latest tag
         id: get_latest_tag
         run: |
-          latest_tag=$(git describe --tags `git rev-list --tags --max-count=1` 2>/dev/null || echo "")
+          # Exclude RC tags so version bumps are always based on the latest stable release
+          latest_tag=$(git tag --list 'v*' --sort=-v:refname | grep -v -F -- '-rc.' | head -n 1 || echo "")
           echo "tag=$latest_tag" >> $GITHUB_OUTPUT
 
       - name: Extract version numbers
@@ -59,7 +60,7 @@ jobs:
 
       - name: Get pull request title and description
         id: get_pr_info
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
             const { data } = await github.rest.pulls.get({
@@ -78,15 +79,19 @@ jobs:
           
           echo "Checking PR title: '$pr_title'"
           
-          if [[ "$pr_title" == patch:* ]] || [[ "$pr_title" == minor:* ]] || [[ "$pr_title" == major:* ]]; then
+          if [[ "$pr_title" == patch:* ]] || [[ "$pr_title" == minor:* ]] || [[ "$pr_title" == major:* ]] || \
+             [[ "$pr_title" == rc-patch:* ]] || [[ "$pr_title" == rc-minor:* ]] || [[ "$pr_title" == rc-major:* ]]; then
             echo "PR title format is valid: $pr_title"
             echo "is_valid=true" >> $GITHUB_OUTPUT
           else
-            echo "::error::Invalid PR title format: '$pr_title'. PR title must start with one of: 'patch:', 'minor:', or 'major:'"
+            echo "::error::Invalid PR title format: '$pr_title'. PR title must start with one of: 'patch:', 'minor:', 'major:', 'rc-patch:', 'rc-minor:', or 'rc-major:'"
             echo "Examples of valid PR titles:"
             echo "  - patch: Fix a bug in subnet creation"
             echo "  - minor: Add support for NAT gateway"
             echo "  - major: Complete redesign of network architecture"
+            echo "  - rc-patch: Fix a bug in subnet creation (release candidate)"
+            echo "  - rc-minor: Add support for NAT gateway (release candidate)"
+            echo "  - rc-major: Complete redesign of network architecture (release candidate)"
             echo "is_valid=false" >> $GITHUB_OUTPUT
             exit 1
           fi
@@ -101,48 +106,65 @@ jobs:
           minor=${{ steps.extract_version.outputs.minor }}
           patch=${{ steps.extract_version.outputs.patch }}
 
+          # Detect RC mode and normalise the bump type
+          is_rc=false
+          case "$pr_title" in
+            rc-patch:*) is_rc=true; bump_type="patch" ;;
+            rc-minor:*) is_rc=true; bump_type="minor" ;;
+            rc-major:*) is_rc=true; bump_type="major" ;;
+            patch:*)    bump_type="patch" ;;
+            minor:*)    bump_type="minor" ;;
+            major:*)    bump_type="major" ;;
+          esac
+
           if [ "$major" -eq 0 ] && [ "$minor" -eq 0 ] && [ "$patch" -eq 0 ]; then
-            # No tags exist, determine the initial version based on PR title
-            case "$pr_title" in
-              patch:*)
-                new_tag="v0.0.1"
-                ;;
-              minor:*)
-                new_tag="v0.1.0"
-                ;;
-              major:*)
-                new_tag="v1.0.0"
-                ;;
+            # No stable tags exist; determine the initial base version
+            case "$bump_type" in
+              patch) new_base="v0.0.1" ;;
+              minor) new_base="v0.1.0" ;;
+              major) new_base="v1.0.0" ;;
             esac
           else
-            # Increment version based on PR title
-            case "$pr_title" in
-              patch:*)
+            # Increment the appropriate version component
+            case "$bump_type" in
+              patch)
                 patch=$((patch + 1))
                 ;;
-              minor:*)
+              minor)
                 minor=$((minor + 1))
                 patch=0
                 ;;
-              major:*)
+              major)
                 major=$((major + 1))
                 minor=0
                 patch=0
                 ;;
             esac
-
-            new_tag="v$major.$minor.$patch"
+            new_base="v$major.$minor.$patch"
           fi
 
-          # Check if the tag already exists and increment the version if necessary
-          while git rev-parse "$new_tag" >/dev/null 2>&1; do
-            IFS='.' read -r -a version_parts <<< "${new_tag#v}"
-            major=${version_parts[0]}
-            minor=${version_parts[1]}
-            patch=${version_parts[2]}
-            patch=$((patch + 1))
-            new_tag="v$major.$minor.$patch"
-          done
+          if [ "$is_rc" = "true" ]; then
+            # Find the highest existing RC for this base version and increment
+            latest_rc=$(git tag --list "${new_base}-rc.*" --sort=-v:refname | head -n 1)
+            if [ -n "$latest_rc" ]; then
+              rc_num=$(echo "$latest_rc" | sed 's/.*-rc\.//')
+              rc_num=$((rc_num + 1))
+            else
+              rc_num=1
+            fi
+            new_tag="${new_base}-rc.${rc_num}"
+          else
+            new_tag="$new_base"
+            # Check if the tag already exists and increment the patch version if necessary
+            while git rev-parse "$new_tag" >/dev/null 2>&1; do
+              IFS='.' read -r -a version_parts <<< "${new_tag#v}"
+              major=${version_parts[0]}
+              minor=${version_parts[1]}
+              patch=${version_parts[2]}
+              patch=$((patch + 1))
+              new_tag="v$major.$minor.$patch"
+            done
+          fi
 
           echo "new_tag=$new_tag" >> $GITHUB_OUTPUT
 
@@ -168,6 +190,7 @@ jobs:
           script: |
             const newTag = '${{ steps.determine_version.outputs.new_tag }}';
             const prInfo = JSON.parse(${{ steps.escape_json.outputs.pr_info }});
+            const isPrerelease = newTag.includes('-rc.');
 
             // Check if the release notes for the new tag already exist
             const existingRelease = await github.rest.repos.getReleaseByTag({
@@ -182,7 +205,8 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 release_id: existingRelease.data.id,
-                body: `${prInfo.body}`
+                body: `${prInfo.body}`,
+                prerelease: isPrerelease
               });
             } else {
               // Create a new release
@@ -193,7 +217,7 @@ jobs:
                 name: newTag,
                 body: `${prInfo.body}`,
                 draft: false,
-                prerelease: false
+                prerelease: isPrerelease
               });
             }
           result-encoding: string
