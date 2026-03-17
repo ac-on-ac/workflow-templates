@@ -18,17 +18,31 @@ on:
         required: false
         type: string
         default: "."
+    secrets:
+      token:
+        # Pass a PAT with contents:write to allow the terraform-docs commit to
+        # re-trigger downstream CI workflows on the updated PR HEAD. If omitted,
+        # the workflow falls back to GITHUB_TOKEN, which matches v1.x behaviour
+        # but will leave required status checks in a "Waiting" state after the
+        # docs commit becomes the new HEAD.
+        description: >
+          GitHub token used to commit and push documentation changes.
+          Pass a Personal Access Token (PAT) with contents:write permission
+          to allow the terraform-docs commit to trigger downstream CI workflows.
+          Defaults to GITHUB_TOKEN, which will NOT re-trigger workflows.
+        required: false
 
 jobs:
   terraform-docs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.head_ref }}
-          
+          token: ${{ secrets.token || github.token }}
+
       - name: Install terraform-docs
         run: |
           curl -sSLo ./terraform-docs.tar.gz https://terraform-docs.io/dl/v0.20.0/terraform-docs-v0.20.0-linux-amd64.tar.gz
@@ -37,20 +51,30 @@ jobs:
           mkdir -p $HOME/bin
           mv terraform-docs $HOME/bin
           echo "$HOME/bin" >> $GITHUB_PATH
-      
+
       - name: Generate README.md files
         run: |
           cd ${{ inputs.working_directory }}
           terraform-docs -c ${{ inputs.terraform_docs_config_file }} .
 
+      - name: Remove terraform-docs.tar.gz from repository and runner
+        run: |
+          # Remove from repository if present
+          if git ls-files --error-unmatch terraform-docs.tar.gz > /dev/null 2>&1; then
+            git rm terraform-docs.tar.gz
+          fi
+          # Remove from runner filesystem (current dir and $HOME)
+          rm -f terraform-docs.tar.gz
+          rm -f $HOME/terraform-docs.tar.gz
+
       - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
+
           # Stage all changes that terraform-docs might have created
           git add .
-          
+
           # Check if there are changes to commit
           if git diff --staged --quiet; then
             echo "No changes to commit"
