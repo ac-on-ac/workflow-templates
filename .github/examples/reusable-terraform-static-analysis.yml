@@ -1,0 +1,11 @@
+# Example usage for reusable-terraform-static-analysis.yml
+name: Example Call for Reusable Terraform Static Analysis Workflow
+
+on:
+  workflow_call:
+
+jobs:
+  call-terraform-static-analysis:
+    uses: ac-on-ac/workflow-templates/.github/workflows/reusable-terraform-static-analysis.yml@terraform-static-analysis-v1.0.0 # Replace version with latest or desired version
+    with:
+      working_directory: . # This is the default value; if this is not needed, you can remove this line
