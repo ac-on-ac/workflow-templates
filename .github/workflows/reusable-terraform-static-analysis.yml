@@ -27,6 +27,7 @@ jobs:
         run: terraform fmt -check -recursive
 
   tflint:
+    needs: [terraform-format]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -62,6 +63,7 @@ jobs:
           done
 
   checkov:
+    needs: [tflint]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
