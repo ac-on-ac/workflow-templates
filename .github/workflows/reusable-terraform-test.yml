@@ -58,7 +58,7 @@ jobs:
           echo "integration_tests=$integration_tests" >> $GITHUB_OUTPUT
 
           echo "Validation tests: $validation_tests"
-          echo "Unit tests: $unit_tests" 
+          echo "Unit tests: $unit_tests"
           echo "Integration tests: $integration_tests"
 
           # Check if any test files were found
@@ -97,6 +97,9 @@ jobs:
 
       - name: Terraform Init
         run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
 
       - name: Run Validation Tests
         run: |

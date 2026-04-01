@@ -7,6 +7,7 @@ This repository is designed to host reusable workflow templates for Terraform te
 - **[reusable-check-pr-title.yml](docs/reusable-check-pr-title.md)**: Checks validity of pull request title
 - **[reusable-terraform-test.yml](docs/reusable-terraform-test.md)**: Runs Terraform tests for a module
 - **[reusable-terraform-docs.yml](docs/reusable-terraform-docs.md)**: Generates documentation for Terraform modules
+- **[reusable-terraform-static-analysis.yml](docs/reusable-terraform-static-analysis.md)**: Runs tflint and checkov static analysis against a Terraform codebase
 - **[reusable-release-and-tag.yml](docs/reusable-release-and-tag.md)**: Creates releases and tags for repositories
 
 ## Versioning Individual Workflows
