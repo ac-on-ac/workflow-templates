@@ -80,6 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TF_TOKEN_app_terraform_io: ${{ secrets.terraform_token }}
+      TFE_TOKEN: ${{ secrets.terraform_token }}
       AZURE_CREDENTIALS: ${{ secrets.azure_credentials }}
       DATABRICKS_HOST: ${{ secrets.databricks_host }}
       DATABRICKS_AZURE_RESOURCE_ID: ${{ secrets.databricks_azure_workspace_resource_id }}
@@ -87,11 +88,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
       - name: Install Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
 
       - name: Azure Login
         if: env.AZURE_CREDENTIALS != ''
-        uses: azure/login@v2.2.0
+        uses: azure/login@v3
         with:
           creds: ${{ secrets.azure_credentials }}
 

@@ -9,7 +9,7 @@ jobs:
     steps:
       - name: Get PR title
         id: get_pr_title
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const { data } = await github.rest.pulls.get({
