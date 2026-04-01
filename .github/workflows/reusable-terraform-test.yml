@@ -13,22 +13,26 @@ on:
         type: string
     secrets:
       azure_credentials:
+        # CHANGED in v2.0.0 — was required: true in v1.x.
         # Now optional. Callers that previously passed this secret are unaffected.
         # Callers that could not use this workflow because they had no Azure
         # credentials (TFC-only, mock-only, Cloudflare, etc.) can now omit it.
         required: false
       terraform_token:
+        # CHANGED in v2.0.0 — previously only scoped to the Terraform Init step.
         # Now applied at the job level, so the token is also available during all
         # terraform test invocations. Existing callers are unaffected; integration
         # tests against app.terraform.io that previously failed to authenticate
         # during terraform test will now succeed.
         required: false
       databricks_host:
+        # NEW in v2.0.0 — not available in v1.x.
         # Workspace URL for the Databricks provider (maps to DATABRICKS_HOST).
         # Must be paired with azure_credentials and databricks_azure_workspace_resource_id
         # for Azure Databricks authentication.
         required: false
       databricks_azure_workspace_resource_id:
+        # NEW in v2.0.0 — not available in v1.x.
         # Full Azure resource ID of the Databricks workspace
         # (maps to DATABRICKS_AZURE_RESOURCE_ID). Required alongside databricks_host
         # and azure_credentials for Azure Databricks authentication.
@@ -80,6 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TF_TOKEN_app_terraform_io: ${{ secrets.terraform_token }}
+      TFE_TOKEN: ${{ secrets.terraform_token }}
       AZURE_CREDENTIALS: ${{ secrets.azure_credentials }}
       DATABRICKS_HOST: ${{ secrets.databricks_host }}
       DATABRICKS_AZURE_RESOURCE_ID: ${{ secrets.databricks_azure_workspace_resource_id }}
@@ -87,7 +92,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
       - name: Install Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
 
       - name: Azure Login
         if: env.AZURE_CREDENTIALS != ''
