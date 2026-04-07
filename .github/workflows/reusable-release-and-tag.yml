@@ -73,9 +73,10 @@ jobs:
 
       - name: Validate PR title format
         id: validate_pr_title
+        env:
+          PR_INFO: ${{ steps.get_pr_info.outputs.result }}
         run: |
-          pr_info='${{ steps.get_pr_info.outputs.result }}'
-          pr_title=$(echo $pr_info | jq -r '.title')
+          pr_title=$(echo "$PR_INFO" | jq -r '.title')
           
           echo "Checking PR title: '$pr_title'"
           
@@ -99,9 +100,10 @@ jobs:
       - name: Determine new version
         id: determine_version
         if: steps.validate_pr_title.outputs.is_valid == 'true'
+        env:
+          PR_INFO: ${{ steps.get_pr_info.outputs.result }}
         run: |
-          pr_info='${{ steps.get_pr_info.outputs.result }}'
-          pr_title=$(echo $pr_info | jq -r '.title')
+          pr_title=$(echo "$PR_INFO" | jq -r '.title')
           major=${{ steps.extract_version.outputs.major }}
           minor=${{ steps.extract_version.outputs.minor }}
           patch=${{ steps.extract_version.outputs.patch }}
@@ -180,8 +182,10 @@ jobs:
 
       - name: Escape JSON strings
         id: escape_json
+        env:
+          PR_INFO: ${{ steps.get_pr_info.outputs.result }}
         run: |
-          pr_info=$(echo '${{ steps.get_pr_info.outputs.result }}' | jq @json)
+          pr_info=$(echo "$PR_INFO" | jq @json)
           echo "pr_info=$pr_info" >> $GITHUB_OUTPUT
 
       - name: Create or Update GitHub release
