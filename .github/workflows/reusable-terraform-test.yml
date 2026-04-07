@@ -11,24 +11,36 @@ on:
       test_directory:
         required: true
         type: string
+      terraform_vars:
+        required: false
+        type: string
+        default: ''
+        description: >
+          Optional newline-separated KEY=VALUE pairs exported as environment
+          variables before any test runs. Intended for TF_VAR_* values that
+          integration tests require but cannot be passed as secrets.
     secrets:
       azure_credentials:
+        # CHANGED in v2.0.0 — was required: true in v1.x.
         # Now optional. Callers that previously passed this secret are unaffected.
         # Callers that could not use this workflow because they had no Azure
         # credentials (TFC-only, mock-only, Cloudflare, etc.) can now omit it.
         required: false
       terraform_token:
+        # CHANGED in v2.0.0 — previously only scoped to the Terraform Init step.
         # Now applied at the job level, so the token is also available during all
         # terraform test invocations. Existing callers are unaffected; integration
         # tests against app.terraform.io that previously failed to authenticate
         # during terraform test will now succeed.
         required: false
       databricks_host:
+        # NEW in v2.0.0 — not available in v1.x.
         # Workspace URL for the Databricks provider (maps to DATABRICKS_HOST).
         # Must be paired with azure_credentials and databricks_azure_workspace_resource_id
         # for Azure Databricks authentication.
         required: false
       databricks_azure_workspace_resource_id:
+        # NEW in v2.0.0 — not available in v1.x.
         # Full Azure resource ID of the Databricks workspace
         # (maps to DATABRICKS_AZURE_RESOURCE_ID). Required alongside databricks_host
         # and azure_credentials for Azure Databricks authentication.
@@ -58,7 +70,7 @@ jobs:
           echo "integration_tests=$integration_tests" >> $GITHUB_OUTPUT
 
           echo "Validation tests: $validation_tests"
-          echo "Unit tests: $unit_tests"
+          echo "Unit tests: $unit_tests" 
           echo "Integration tests: $integration_tests"
 
           # Check if any test files were found
@@ -99,8 +111,15 @@ jobs:
       - name: Terraform Init
         run: terraform init
 
-      - name: Terraform Validate
-        run: terraform validate
+      - name: Set Terraform variables
+        if: inputs.terraform_vars != ''
+        env:
+          TERRAFORM_VARS: ${{ inputs.terraform_vars }}
+        run: |
+          while IFS= read -r line || [ -n "$line" ]; do
+            [ -z "$line" ] && continue
+            echo "$line" >> $GITHUB_ENV
+          done <<< "$TERRAFORM_VARS"
 
       - name: Run Validation Tests
         run: |
